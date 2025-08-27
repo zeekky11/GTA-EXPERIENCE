@@ -1,48 +1,55 @@
-import { EventManager } from "../../core/EventManager"
-import { Database } from "../../core/database"
+import type { EventManager } from "../../core/EventManager"
+import type { Database } from "../../core/database"
 import { Logger } from "../../utils/Logger"
 import type { AdminLevel, AdminAction, PlayerReport } from "../../types"
 
 export class AdminManager {
   private static instance: AdminManager
+  private database: Database
+  private eventManager: EventManager
+  private logger: Logger
   private adminLevels: Map<number, AdminLevel> = new Map()
   private activeReports: Map<number, PlayerReport> = new Map()
   private adminActions: AdminAction[] = []
 
-  private constructor() {
+  constructor(database: Database, eventManager: EventManager) {
+    this.database = database
+    this.eventManager = eventManager
+    this.logger = new Logger("AdminManager")
+
     this.initializeEvents()
     this.loadAdminLevels()
     this.loadActiveReports()
   }
 
-  public static getInstance(): AdminManager {
+  public static getInstance(database: Database, eventManager: EventManager): AdminManager {
     if (!AdminManager.instance) {
-      AdminManager.instance = new AdminManager()
+      AdminManager.instance = new AdminManager(database, eventManager)
     }
     return AdminManager.instance
   }
 
   private initializeEvents(): void {
     // Admin action events
-    EventManager.on("admin:kick", this.handleKick.bind(this))
-    EventManager.on("admin:ban", this.handleBan.bind(this))
-    EventManager.on("admin:unban", this.handleUnban.bind(this))
-    EventManager.on("admin:mute", this.handleMute.bind(this))
-    EventManager.on("admin:unmute", this.handleUnmute.bind(this))
-    EventManager.on("admin:warn", this.handleWarn.bind(this))
-    EventManager.on("admin:teleport", this.handleTeleport.bind(this))
-    EventManager.on("admin:spectate", this.handleSpectate.bind(this))
+    this.eventManager.on("admin:kick", this.handleKick.bind(this))
+    this.eventManager.on("admin:ban", this.handleBan.bind(this))
+    this.eventManager.on("admin:unban", this.handleUnban.bind(this))
+    this.eventManager.on("admin:mute", this.handleMute.bind(this))
+    this.eventManager.on("admin:unmute", this.handleUnmute.bind(this))
+    this.eventManager.on("admin:warn", this.handleWarn.bind(this))
+    this.eventManager.on("admin:teleport", this.handleTeleport.bind(this))
+    this.eventManager.on("admin:spectate", this.handleSpectate.bind(this))
 
     // Report events
-    EventManager.on("report:create", this.handleCreateReport.bind(this))
-    EventManager.on("report:accept", this.handleAcceptReport.bind(this))
-    EventManager.on("report:close", this.handleCloseReport.bind(this))
+    this.eventManager.on("report:create", this.handleCreateReport.bind(this))
+    this.eventManager.on("report:accept", this.handleAcceptReport.bind(this))
+    this.eventManager.on("report:close", this.handleCloseReport.bind(this))
   }
 
   private async loadAdminLevels(): Promise<void> {
     try {
       const query = "SELECT player_id, level, permissions FROM admin_levels WHERE active = 1"
-      const results = await Database.query(query)
+      const results = await this.database.query(query)
 
       for (const row of results) {
         this.adminLevels.set(row.player_id, {
@@ -53,9 +60,9 @@ export class AdminManager {
         })
       }
 
-      Logger.info(`Loaded ${this.adminLevels.size} admin levels`)
+      this.logger.info(`Loaded ${this.adminLevels.size} admin levels`)
     } catch (error) {
-      Logger.error("Error loading admin levels:", error)
+      this.logger.error("Error loading admin levels:", error)
     }
   }
 
@@ -68,7 +75,7 @@ export class AdminManager {
                 JOIN characters c2 ON r.reported_id = c2.id
                 WHERE r.status = 'open'
             `
-      const results = await Database.query(query)
+      const results = await this.database.query(query)
 
       for (const row of results) {
         this.activeReports.set(row.id, {
@@ -85,9 +92,9 @@ export class AdminManager {
         })
       }
 
-      Logger.info(`Loaded ${this.activeReports.size} active reports`)
+      this.logger.info(`Loaded ${this.activeReports.size} active reports`)
     } catch (error) {
-      Logger.error("Error loading active reports:", error)
+      this.logger.error("Error loading active reports:", error)
     }
   }
 
@@ -115,7 +122,7 @@ export class AdminManager {
       }
 
       // Insert or update admin level
-      await Database.query(
+      await this.database.query(
         `INSERT INTO admin_levels (player_id, level, permissions, set_by, created_at) 
                  VALUES (?, ?, ?, ?, NOW()) 
                  ON DUPLICATE KEY UPDATE level = ?, permissions = ?, set_by = ?, updated_at = NOW()`,
@@ -137,10 +144,10 @@ export class AdminManager {
       // Log action
       await this.logAdminAction(setBy, "SET_ADMIN_LEVEL", playerId, `Set admin level to ${level}`)
 
-      Logger.info(`Admin level set: Player ${playerId} -> Level ${level} by ${setBy}`)
+      this.logger.info(`Admin level set: Player ${playerId} -> Level ${level} by ${setBy}`)
       return { success: true, message: `Nivel de admin establecido a ${level}` }
     } catch (error) {
-      Logger.error("Error setting admin level:", error)
+      this.logger.error("Error setting admin level:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -159,12 +166,12 @@ export class AdminManager {
       await this.logAdminAction(adminId, "KICK", targetId, reason)
 
       // Kick player (this would be handled by RageMP)
-      EventManager.emit("player:kick", { playerId: targetId, reason, adminId })
+      this.eventManager.emit("player:kick", { playerId: targetId, reason, adminId })
 
-      Logger.info(`Player ${targetId} kicked by admin ${adminId}. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} kicked by admin ${adminId}. Reason: ${reason}`)
       return { success: true, message: "Jugador expulsado correctamente" }
     } catch (error) {
-      Logger.error("Error kicking player:", error)
+      this.logger.error("Error kicking player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -183,7 +190,7 @@ export class AdminManager {
       const expiresAt = duration > 0 ? new Date(Date.now() + duration * 60 * 60 * 1000) : null
 
       // Insert ban record
-      await Database.query(
+      await this.database.query(
         "INSERT INTO player_bans (player_id, banned_by, reason, expires_at, created_at) VALUES (?, ?, ?, ?, NOW())",
         [targetId, adminId, reason, expiresAt],
       )
@@ -193,12 +200,12 @@ export class AdminManager {
       await this.logAdminAction(adminId, "BAN", targetId, `${reason} (${durationText})`)
 
       // Kick player if online
-      EventManager.emit("player:kick", { playerId: targetId, reason: `Baneado: ${reason}`, adminId })
+      this.eventManager.emit("player:kick", { playerId: targetId, reason: `Baneado: ${reason}`, adminId })
 
-      Logger.info(`Player ${targetId} banned by admin ${adminId}. Duration: ${durationText}. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} banned by admin ${adminId}. Duration: ${durationText}. Reason: ${reason}`)
       return { success: true, message: `Jugador baneado por ${durationText}` }
     } catch (error) {
-      Logger.error("Error banning player:", error)
+      this.logger.error("Error banning player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -214,7 +221,7 @@ export class AdminManager {
       }
 
       // Update ban record
-      const result = await Database.query(
+      const result = await this.database.query(
         "UPDATE player_bans SET active = 0, unbanned_by = ?, unban_reason = ?, unbanned_at = NOW() WHERE player_id = ? AND active = 1",
         [adminId, reason, targetId],
       )
@@ -226,10 +233,10 @@ export class AdminManager {
       // Log action
       await this.logAdminAction(adminId, "UNBAN", targetId, reason)
 
-      Logger.info(`Player ${targetId} unbanned by admin ${adminId}. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} unbanned by admin ${adminId}. Reason: ${reason}`)
       return { success: true, message: "Jugador desbaneado correctamente" }
     } catch (error) {
-      Logger.error("Error unbanning player:", error)
+      this.logger.error("Error unbanning player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -248,7 +255,7 @@ export class AdminManager {
       const expiresAt = new Date(Date.now() + duration * 60 * 1000) // duration in minutes
 
       // Insert mute record
-      await Database.query(
+      await this.database.query(
         "INSERT INTO player_mutes (player_id, muted_by, reason, expires_at, created_at) VALUES (?, ?, ?, ?, NOW())",
         [targetId, adminId, reason, expiresAt],
       )
@@ -256,10 +263,10 @@ export class AdminManager {
       // Log action
       await this.logAdminAction(adminId, "MUTE", targetId, `${reason} (${duration} minutes)`)
 
-      Logger.info(`Player ${targetId} muted by admin ${adminId}. Duration: ${duration} minutes. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} muted by admin ${adminId}. Duration: ${duration} minutes. Reason: ${reason}`)
       return { success: true, message: `Jugador muteado por ${duration} minutos` }
     } catch (error) {
-      Logger.error("Error muting player:", error)
+      this.logger.error("Error muting player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -275,7 +282,7 @@ export class AdminManager {
       }
 
       // Update mute record
-      const result = await Database.query(
+      const result = await this.database.query(
         "UPDATE player_mutes SET active = 0, unmuted_by = ?, unmute_reason = ?, unmuted_at = NOW() WHERE player_id = ? AND active = 1",
         [adminId, reason, targetId],
       )
@@ -287,10 +294,10 @@ export class AdminManager {
       // Log action
       await this.logAdminAction(adminId, "UNMUTE", targetId, reason)
 
-      Logger.info(`Player ${targetId} unmuted by admin ${adminId}. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} unmuted by admin ${adminId}. Reason: ${reason}`)
       return { success: true, message: "Jugador desmuteado correctamente" }
     } catch (error) {
-      Logger.error("Error unmuting player:", error)
+      this.logger.error("Error unmuting player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -306,7 +313,7 @@ export class AdminManager {
       }
 
       // Insert warning
-      await Database.query(
+      await this.database.query(
         "INSERT INTO player_warnings (player_id, warned_by, reason, created_at) VALUES (?, ?, ?, NOW())",
         [targetId, adminId, reason],
       )
@@ -315,12 +322,12 @@ export class AdminManager {
       await this.logAdminAction(adminId, "WARN", targetId, reason)
 
       // Notify player if online
-      EventManager.emit("player:warn", { playerId: targetId, reason, adminId })
+      this.eventManager.emit("player:warn", { playerId: targetId, reason, adminId })
 
-      Logger.info(`Player ${targetId} warned by admin ${adminId}. Reason: ${reason}`)
+      this.logger.info(`Player ${targetId} warned by admin ${adminId}. Reason: ${reason}`)
       return { success: true, message: "Advertencia enviada correctamente" }
     } catch (error) {
-      Logger.error("Error warning player:", error)
+      this.logger.error("Error warning player:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -342,7 +349,7 @@ export class AdminManager {
       }
 
       // Insert report
-      const result = await Database.query(
+      const result = await this.database.query(
         "INSERT INTO player_reports (reporter_id, reported_id, reason, description, status, created_at) VALUES (?, ?, ?, ?, 'open', NOW())",
         [reporterId, reportedId, reason, description],
       )
@@ -368,12 +375,12 @@ export class AdminManager {
       })
 
       // Notify online admins
-      EventManager.emit("admin:newReport", { reportId, reporterId, reportedId, reason })
+      this.eventManager.emit("admin:newReport", { reportId, reporterId, reportedId, reason })
 
-      Logger.info(`New report created: ${reportId} by ${reporterId} against ${reportedId}`)
+      this.logger.info(`New report created: ${reportId} by ${reporterId} against ${reportedId}`)
       return { success: true, message: "Reporte enviado correctamente", reportId }
     } catch (error) {
-      Logger.error("Error creating report:", error)
+      this.logger.error("Error creating report:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -394,7 +401,7 @@ export class AdminManager {
       }
 
       // Update report
-      await Database.query("UPDATE player_reports SET assigned_admin = ?, status = 'in_progress' WHERE id = ?", [
+      await this.database.query("UPDATE player_reports SET assigned_admin = ?, status = 'in_progress' WHERE id = ?", [
         adminId,
         reportId,
       ])
@@ -403,10 +410,10 @@ export class AdminManager {
       report.assigned_admin = adminId
       report.status = "in_progress"
 
-      Logger.info(`Report ${reportId} accepted by admin ${adminId}`)
+      this.logger.info(`Report ${reportId} accepted by admin ${adminId}`)
       return { success: true, message: "Reporte aceptado" }
     } catch (error) {
-      Logger.error("Error accepting report:", error)
+      this.logger.error("Error accepting report:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
@@ -427,7 +434,7 @@ export class AdminManager {
       }
 
       // Update report
-      await Database.query(
+      await this.database.query(
         "UPDATE player_reports SET status = 'closed', resolution = ?, closed_by = ?, closed_at = NOW() WHERE id = ?",
         [resolution, adminId, reportId],
       )
@@ -436,19 +443,19 @@ export class AdminManager {
       this.activeReports.delete(reportId)
 
       // Notify reporter if online
-      EventManager.emit("player:reportClosed", { playerId: report.reporter_id, reportId, resolution })
+      this.eventManager.emit("player:reportClosed", { playerId: report.reporter_id, reportId, resolution })
 
-      Logger.info(`Report ${reportId} closed by admin ${adminId}`)
+      this.logger.info(`Report ${reportId} closed by admin ${adminId}`)
       return { success: true, message: "Reporte cerrado correctamente" }
     } catch (error) {
-      Logger.error("Error closing report:", error)
+      this.logger.error("Error closing report:", error)
       return { success: false, message: "Error interno del servidor" }
     }
   }
 
   public async logAdminAction(adminId: number, action: string, targetId: number, details: string): Promise<void> {
     try {
-      await Database.query(
+      await this.database.query(
         "INSERT INTO admin_logs (admin_id, action, target_id, details, created_at) VALUES (?, ?, ?, ?, NOW())",
         [adminId, action, targetId, details],
       )
@@ -468,7 +475,7 @@ export class AdminManager {
         this.adminActions = this.adminActions.slice(-100)
       }
     } catch (error) {
-      Logger.error("Error logging admin action:", error)
+      this.logger.error("Error logging admin action:", error)
     }
   }
 
@@ -482,93 +489,176 @@ export class AdminManager {
 
   public async isPlayerBanned(playerId: number): Promise<boolean> {
     try {
-      const result = await Database.query(
+      const result = await this.database.query(
         "SELECT id FROM player_bans WHERE player_id = ? AND active = 1 AND (expires_at IS NULL OR expires_at > NOW())",
         [playerId],
       )
       return result.length > 0
     } catch (error) {
-      Logger.error("Error checking ban status:", error)
+      this.logger.error("Error checking ban status:", error)
       return false
     }
   }
 
   public async isPlayerMuted(playerId: number): Promise<boolean> {
     try {
-      const result = await Database.query(
+      const result = await this.database.query(
         "SELECT id FROM player_mutes WHERE player_id = ? AND active = 1 AND expires_at > NOW()",
         [playerId],
       )
       return result.length > 0
     } catch (error) {
-      Logger.error("Error checking mute status:", error)
+      this.logger.error("Error checking mute status:", error)
       return false
     }
   }
 
   private async getCharacterName(playerId: number): Promise<string> {
     try {
-      const result = await Database.query("SELECT name FROM characters WHERE id = ?", [playerId])
+      const result = await this.database.query("SELECT name FROM characters WHERE id = ?", [playerId])
       return result.length > 0 ? result[0].name : "Unknown"
     } catch (error) {
-      Logger.error("Error getting character name:", error)
+      this.logger.error("Error getting character name:", error)
       return "Unknown"
     }
   }
 
-  // Event handlers
+  // Command handling methods
+  public isAdminCommand(command: string): boolean {
+    const adminCommands = [
+      "akick",
+      "aban",
+      "aunban",
+      "amute",
+      "aunmute",
+      "awarn",
+      "goto",
+      "gethere",
+      "spec",
+      "aduty",
+      "setadmin",
+      "reports",
+      "acceptreport",
+      "closereport",
+    ]
+    return adminCommands.includes(command)
+  }
+
+  public async handleCommand(player: any, command: string, params: string[]): Promise<void> {
+    const adminLevel = this.getAdminLevel(player.id)
+
+    if (adminLevel === 0) {
+      player.outputChatBox("No tienes permisos de administrador.")
+      return
+    }
+
+    switch (command) {
+      case "akick":
+        if (params.length < 2) {
+          player.outputChatBox("Uso: /akick [id] [razón]")
+          return
+        }
+        const kickResult = await this.kickPlayer(Number.parseInt(params[0]), player.id, params.slice(1).join(" "))
+        player.outputChatBox(kickResult.message)
+        break
+
+      case "aban":
+        if (params.length < 2) {
+          player.outputChatBox("Uso: /aban [id] [razón] [horas (opcional)]")
+          return
+        }
+        const duration = params[2] ? Number.parseInt(params[2]) : 0
+        const banResult = await this.banPlayer(Number.parseInt(params[0]), player.id, params[1], duration)
+        player.outputChatBox(banResult.message)
+        break
+
+      case "setadmin":
+        if (params.length < 2) {
+          player.outputChatBox("Uso: /setadmin [id] [nivel]")
+          return
+        }
+        const level = Number.parseInt(params[1])
+        const defaultPermissions = this.getDefaultPermissions(level)
+        const setAdminResult = await this.setAdminLevel(
+          Number.parseInt(params[0]),
+          level,
+          defaultPermissions,
+          player.id,
+        )
+        player.outputChatBox(setAdminResult.message)
+        break
+
+      default:
+        player.outputChatBox("Comando de admin no reconocido.")
+    }
+  }
+
+  private getDefaultPermissions(level: number): string[] {
+    const permissions: string[] = []
+
+    if (level >= 1) permissions.push("kick", "warn", "handle_reports")
+    if (level >= 2) permissions.push("mute", "unmute")
+    if (level >= 3) permissions.push("ban", "unban")
+    if (level >= 4) permissions.push("teleport", "spectate")
+    if (level >= 5) permissions.push("set_admin_level")
+    if (level >= 10) permissions.push("*") // All permissions
+
+    return permissions
+  }
+
+  // Event handlers remain the same but use instance methods
   private async handleKick(data: any): Promise<void> {
     const result = await this.kickPlayer(data.targetId, data.adminId, data.reason)
-    EventManager.emit("admin:kickResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:kickResult", { adminId: data.adminId, result })
   }
 
   private async handleBan(data: any): Promise<void> {
     const result = await this.banPlayer(data.targetId, data.adminId, data.reason, data.duration)
-    EventManager.emit("admin:banResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:banResult", { adminId: data.adminId, result })
   }
 
   private async handleUnban(data: any): Promise<void> {
     const result = await this.unbanPlayer(data.targetId, data.adminId, data.reason)
-    EventManager.emit("admin:unbanResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:unbanResult", { adminId: data.adminId, result })
   }
 
   private async handleMute(data: any): Promise<void> {
     const result = await this.mutePlayer(data.targetId, data.adminId, data.reason, data.duration)
-    EventManager.emit("admin:muteResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:muteResult", { adminId: data.adminId, result })
   }
 
   private async handleUnmute(data: any): Promise<void> {
     const result = await this.unmutePlayer(data.targetId, data.adminId, data.reason)
-    EventManager.emit("admin:unmuteResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:unmuteResult", { adminId: data.adminId, result })
   }
 
   private async handleWarn(data: any): Promise<void> {
     const result = await this.warnPlayer(data.targetId, data.adminId, data.reason)
-    EventManager.emit("admin:warnResult", { adminId: data.adminId, result })
+    this.eventManager.emit("admin:warnResult", { adminId: data.adminId, result })
   }
 
   private async handleTeleport(data: any): Promise<void> {
     // This would be handled by RageMP teleportation
-    EventManager.emit("player:teleport", data)
+    this.eventManager.emit("player:teleport", data)
   }
 
   private async handleSpectate(data: any): Promise<void> {
     // This would be handled by RageMP spectate mode
-    EventManager.emit("player:spectate", data)
+    this.eventManager.emit("player:spectate", data)
   }
 
   private async handleCreateReport(data: any): Promise<void> {
     const result = await this.createReport(data.reporterId, data.reportedId, data.reason, data.description)
-    EventManager.emit("report:createResult", { playerId: data.reporterId, result })
+    this.eventManager.emit("report:createResult", { playerId: data.reporterId, result })
   }
 
   private async handleAcceptReport(data: any): Promise<void> {
     const result = await this.acceptReport(data.reportId, data.adminId)
-    EventManager.emit("report:acceptResult", { adminId: data.adminId, result })
+    this.eventManager.emit("report:acceptResult", { adminId: data.adminId, result })
   }
 
   private async handleCloseReport(data: any): Promise<void> {
     const result = await this.closeReport(data.reportId, data.adminId, data.resolution)
-    EventManager.emit("report:closeResult", { adminId: data.adminId, result })
+    this.eventManager.emit("report:closeResult", { adminId: data.adminId, result })
   }
 }

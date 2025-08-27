@@ -13,7 +13,8 @@ import { AdminManager } from "./systems/admin/AdminManager"
 import { ChatManager } from "./systems/chat/ChatManager"
 import { EventManager } from "./core/EventManager"
 import { Logger } from "./utils/Logger"
-import { mp } from "rage-server" // Declare the mp variable
+
+declare const mp: any
 
 class AmericanRoleplayServer {
   private database: Database
