@@ -1,0 +1,26 @@
+{
+  "name": "american-roleplay-gamemode",
+  "version": "1.0.0",
+  "description": "Complete American Roleplay gamemode for RageMP",
+  "main": "server/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node server/index.ts",
+    "start": "node dist/server/index.js",
+    "setup": "npm install && npm run build && npm run setup-db",
+    "setup-db": "node scripts/setup-database.js"
+  },
+  "dependencies": {
+    "@types/node": "^20.0.0",
+    "bcrypt": "^5.1.0",
+    "mysql2": "^3.6.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.0"
+  },
+  "keywords": ["ragemp", "roleplay", "gamemode", "gta5", "multiplayer"],
+  "author": "v0",
+  "license": "MIT"
+}
